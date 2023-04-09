@@ -1,10 +1,12 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 
-import { BehaviorSubject, catchError, combineLatest, map, merge, Observable, scan, shareReplay, Subject, tap, throwError } from 'rxjs';
+import { BehaviorSubject, catchError, combineLatest, filter, forkJoin, map, merge, Observable, of, scan, shareReplay, Subject, switchMap, tap, throwError } from 'rxjs';
 
 import { Product } from './product';
 import { ProductCategoryService } from '../product-categories/product-category.service';
+import { SupplierService } from '../suppliers/supplier.service';
+import { Supplier } from '../suppliers/supplier';
 
 @Injectable({
   providedIn: 'root'
@@ -44,28 +46,55 @@ export class ProductService {
     combineLatest([
       this.productsWithCategory$,
       this.productSelectedAction$
-    ])
-      .pipe(
-        map(([products, productId]) =>
-          products.find(product => product.id === productId)
-        ),
-        tap(product => console.log('selectedProduct', product)),
-        shareReplay(1),
-      );
+    ]).pipe(
+      map(([products, productId]) =>
+        products.find(product => product.id === productId)
+      ),
+      tap(product => console.log('selectedProduct', product)),
+      shareReplay(1),
+    );
 
   productsWithAdd$ = merge(
     this.productsWithCategory$,
     this.productInsertedAction$
-  )
+  ).pipe(
+    scan(
+      (acc, value) =>
+        (value instanceof Array)
+          ? [...value]
+          : [...acc, value], [] as Product[])
+  );
+
+  // Get it all approach
+  selectedProductSuppliers1$ = combineLatest([
+    this.selectedProduct$,
+    this.supplierService.suppliers$
+  ]).pipe(
+    map(([selectedProduct, suppliers]) =>
+      suppliers.filter(supplier => selectedProduct?.supplierIds?.includes(supplier.id))
+    )
+  );
+
+  // Just in Time approach
+  selectedProductSuppliers$ = this.selectedProduct$
     .pipe(
-      scan(
-        (acc, value) =>
-          (value instanceof Array)
-            ? [...value]
-            : [...acc, value], [] as Product[])
+      filter(selectedProduct => Boolean(selectedProduct)),
+      switchMap(selectedProduct => {
+        if (selectedProduct?.supplierIds) {
+          return forkJoin(selectedProduct.supplierIds.map(supplierId =>
+            this.http.get<Supplier>(`${this.suppliersUrl}/${supplierId}`)
+          ));
+        } else {
+          return of([]);
+        }
+      }),
+      tap(suppliers => console.log('product suppliers', JSON.stringify(suppliers))),
     );
 
-  constructor(private http: HttpClient, private productCategoryService: ProductCategoryService) { }
+  constructor(
+    private http: HttpClient,
+    private productCategoryService: ProductCategoryService,
+    private supplierService: SupplierService) { }
 
   selectedProductChanged(productId: number) {
     this.productSelectedSubject.next(productId);
